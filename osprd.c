@@ -257,7 +257,27 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 
 		// Your code here (instead of the next two lines).
 		eprintk("Attempting to acquire\n");
-		r = -ENOTTY;
+		
+		unsigned local_ticket;
+		
+		// Block
+		local_ticket = d->ticket_head;
+		d->ticket_head++;
+		
+		// wait_event_interruptible returns a nonzero value if
+		// interrupted by a signal, so return -ERESTARTSYS if it does.
+		if (wait_event_interruptible (d->blockq, d->n_writel == 0
+			&& (!filp_writable || d->n_readl == 0)
+			&& d->ticket_tail == local_ticket))
+			{ return -ERESTARTSYS; }
+		
+		// Set lock flag
+		filp->f_flags |= F_OSPRD_LOCKED;
+		if (filp_writable)
+			{ d->n_writel++; }	
+		else
+			{ d->n_readl++; }
+		r = 0;
 
 	} else if (cmd == OSPRDIOCTRYACQUIRE) {
 
@@ -286,6 +306,8 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 			
 			else
 			{ d->n_readl++; }
+			
+			r = 0;
 		 }
 
 		// Also wake up processes waiting on 'd->blockq' as needed.

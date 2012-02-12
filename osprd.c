@@ -61,6 +61,10 @@ typedef struct osprd_info {
 
 	wait_queue_head_t blockq;       // Wait queue for tasks blocked on
 					// the device lock
+					
+	size_t n_readl;			// Number of read locks
+	
+	size_t n_writel;		// Number of write locks
 
 	/* HINT: You may want to add additional fields to help
 	         in detecting deadlock. */
@@ -107,8 +111,9 @@ static void for_each_open_file(struct task_struct *task,
  */
 static void osprd_process_request(osprd_info_t *d, struct request *req)
 {
-
-	int err;
+	long int sector_offset;
+	long int numbytes;
+	//int err;
 	if (!blk_fs_request(req)) {
 		end_request(req, 0);
 		return;
@@ -125,8 +130,9 @@ static void osprd_process_request(osprd_info_t *d, struct request *req)
 	// Your code here.
 
 	 //read
-	long int sector_offset = req->sector*SECTOR_SIZE;
-	long int numbytes = req->current_nr_sectors*SECTOR_SIZE;
+
+	sector_offset = req->sector*SECTOR_SIZE;
+	numbytes = req->current_nr_sectors*SECTOR_SIZE;
 
 	if(rq_data_dir(req)==READ){
 		memcpy(req->buffer, d->data+sector_offset, numbytes);
@@ -163,8 +169,14 @@ static int osprd_open(struct inode *inode, struct file *filp)
 // This function is called when a /dev/osprdX file is finally closed.
 // (If the file descriptor was dup2ed, this function is called only when the
 // last copy is closed.)
+
+int osprd_ioctl(struct inode *inode, struct file *filp,
+		unsigned int cmd, unsigned long arg);
+
 static int osprd_close_last(struct inode *inode, struct file *filp)
 {
+	int r;
+	r = 0;
 	if (filp) {
 		osprd_info_t *d = file2osprd(filp);
 		int filp_writable = filp->f_mode & FMODE_WRITE;
@@ -172,7 +184,7 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 		// EXERCISE: If the user closes a ramdisk file that holds
 		// a lock, release the lock.  Also wake up blocked processes
 		// as appropriate.
-
+		r = osprd_ioctl (inode, filp, OSPRDIOCRELEASE, 0);
 		// Your code here.
 
 		// This line avoids compiler warnings; you may remove it.
@@ -180,7 +192,7 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 
 	}
 
-	return 0;
+	return r;
 }
 
 
@@ -258,19 +270,65 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 
 		// Your code here (instead of the next two lines).
 		eprintk("Attempting to try acquire\n");
-		r = -ENOTTY;
+		
+		// Check for an existing lock.
+		if (filp->f_flags | F_OSPRD_LOCKED)
+		{ r = -EBUSY; }
+		
+		// If *filp is open for writing (filp_writable), then attempt
+		// to write-lock the ramdisk; otherwise attempt to read-lock
+		// the ramdisk.
+		else 
+		{
+			filp->f_flags |= F_OSPRD_LOCKED;
+			if (filp_writable)
+			{ d->n_writel++; }
+			
+			else
+			{ d->n_readl++; }
+		 }
+
+		// Also wake up processes waiting on 'd->blockq' as needed.
+		//
+		// If the lock request would cause a deadlock, return -EDEADLK.
+		// Otherwise, if we can grant the lock request, return 0.
+
+		//r = -ENOTTY;
 
 	} else if (cmd == OSPRDIOCRELEASE) {
 
 		// EXERCISE: Unlock the ramdisk.
 		//
 		// If the file hasn't locked the ramdisk, return -EINVAL.
+		if (!(filp->f_flags | F_OSPRD_LOCKED))
+			{ r = -EINVAL; }
+		
 		// Otherwise, clear the lock from filp->f_flags, wake up
 		// the wait queue, perform any additional accounting steps
 		// you need, and return 0.
-
+		else 
+		{
+			// Clear lock flag.
+			filp->f_flags ^= F_OSPRD_LOCKED;
+			
+			// Wake queue.
+			wake_up_all(&d->blockq);		
+				
+			// Additional steps.
+			
+			if (filp_writable)
+			{ d->n_writel--; }
+			
+			else
+			{ d->n_readl--; }
+			
+			// Return.
+			r = 0;
+		}
+		
+		
 		// Your code here (instead of the next line).
-		r = -ENOTTY;
+		//r = -ENOTTY;
 
 	} else
 		r = -ENOTTY; /* unknown command */
@@ -286,6 +344,8 @@ static void osprd_setup(osprd_info_t *d)
 	init_waitqueue_head(&d->blockq);
 	osp_spin_lock_init(&d->mutex);
 	d->ticket_head = d->ticket_tail = 0;
+	d->n_readl = 0;
+	d->n_writel = 0;
 	/* Add code here if you add fields to osprd_info_t. */
 }
 

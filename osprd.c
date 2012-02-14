@@ -199,17 +199,20 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 		{
 			// Clear lock flag.
 			filp->f_flags ^= F_OSPRD_LOCKED;
-			
+			d->mutex.lock = 0;
+			d->n_writel = 0;
+			d->n_readl = 0;
+			d->ticket_tail++;
 			// Wake queue.
 			wake_up_all(&d->blockq);		
 				
 			// Additional steps.
 			
-			if (filp_writable)
+			/*if (filp_writable)
 			{d->n_writel--;}
 			else
 			{ d->n_readl--;}
-			d->ticket_tail++;
+			d->ticket_tail++;*/
 			// Return.
 			eprintk("write: %d\n", d->n_writel);
 			r = 0;
@@ -379,7 +382,12 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		else 
 		{
 			// Clear lock flag.
-			filp->f_flags ^= F_OSPRD_LOCKED;
+			filp->f_flags &= ~F_OSPRD_LOCKED;
+			
+			d->n_writel = 0;
+			d->n_readl = 0;
+			
+			d->mutex.lock = 0;
 			
 			// Wake queue.
 			//osp_spin_lock(&(d->mutex));
@@ -387,10 +395,10 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 			//osp_spin_unlock(&(d->mutex));	
 			// Additional steps.
 			
-			if (filp_writable)
+			/*if (filp_writable)
 			{ d->n_writel--;}
 			else
-			{ d->n_readl--; }
+			{ d->n_readl--; }*/
 			
 			// Return.
 			r = 0;

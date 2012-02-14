@@ -138,8 +138,8 @@ static void osprd_process_request(osprd_info_t *d, struct request *req)
 		memcpy(req->buffer, d->data+sector_offset, numbytes);
 		/*if(err>0)
 			eprintk("failure\n");
-		else
-			eprintk("Harro\n");*/
+		else*/
+		//	eprintk("Harro\n");
 	}else if(rq_data_dir(req)==WRITE){
 		memcpy(d->data+sector_offset,req->buffer, numbytes);
 		/*if(err>0)
@@ -199,10 +199,19 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 		{
 			// Clear lock flag.
 			filp->f_flags ^= F_OSPRD_LOCKED;
-			d->mutex.lock = 0;
+			for(;;){
+				osp_spin_lock(&(d->mutex));
+				if (d->mutex.lock==-1)
+					break;
+				osp_spin_unlock(&(d->mutex));
+			}
+
+			//d->mutex.lock = 0;
 			d->n_writel = 0;
 			d->n_readl = 0;
-			d->ticket_tail++;
+			if(d->ticket_tail<d->ticket_head)
+				d->ticket_tail++;
+			osp_spin_unlock(&(d->mutex));		
 			// Wake queue.
 			wake_up_all(&d->blockq);		
 				
@@ -214,7 +223,7 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 			{ d->n_readl--;}
 			d->ticket_tail++;*/
 			// Return.
-			eprintk("write: %d\n", d->n_writel);
+			//eprintk("write: %d\n", d->n_writel);
 			r = 0;
 		}
 
@@ -293,9 +302,15 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		/*while(d->mutex.lock != 0){
 			continue;
 		}*/
-		osp_spin_lock(&(d->mutex));
+		for(;;){
+			osp_spin_lock(&(d->mutex));
+			if (d->mutex.lock==-1)
+				break;
+			osp_spin_unlock(&(d->mutex));
+		}
 
 		local_ticket = d->ticket_head;
+		//eprintk("head: %d\ntail: %d\n", d->ticket_head, d->ticket_tail);
 		d->ticket_head++;
 		//eprintk("LOCKED\n");
 		if (d->mutex.lock>0)
@@ -306,10 +321,10 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		//eprintk("UNLOCKED\n");
 		// wait_event_interruptible returns a nonzero value if
 		// interrupted by a signal, so return -ERESTARTSYS if it does.
-		eprintk("%d\n",d->n_writel == 0);	
-		eprintk("%d\n", (!filp_writable || d->n_readl == 0));	
-		eprintk("writel: %d\n",d->n_writel);	
-		eprintk("%d\n", d->ticket_tail == local_ticket);		
+		//eprintk("%d\n",d->n_writel == 0);	
+		//eprintk("%d\n", (!filp_writable || d->n_readl == 0));	
+		//eprintk("writel: %d\n",d->n_writel);	
+		//eprintk("%d\n", d->ticket_tail == local_ticket);		
 		if(!(d->n_writel == 0 && (!filp_writable || d->n_readl == 0) && d->ticket_tail == local_ticket)){
 			if (wait_event_interruptible(d->blockq, d->n_writel == 0
 			&& (!filp_writable || d->n_readl == 0)
@@ -325,9 +340,9 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// Set lock flag
 		//filp->f_flags |= F_OSPRD_LOCKED;
 		if (filp_writable)
-			{ d->n_writel++; }	
+			{ d->n_writel++; eprintk("WRITE, ticket: %d\n", local_ticket);}	
 		else
-			{ d->n_readl++; }
+			{ d->n_readl++; eprintk("READ, ticket: %d\n", local_ticket);}
 		r = 0;
 
 	} else if (cmd == OSPRDIOCTRYACQUIRE) {
@@ -344,7 +359,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		
 		// Check for an existing lock.
 		if (filp->f_flags & F_OSPRD_LOCKED || d->ticket_tail != d->ticket_head)
-		{ r = -EBUSY; eprintk("Stopped\n");}
+		{ r = -EBUSY;} //eprintk("Stopped\n");}
 		
 		// If *filp is open for writing (filp_writable), then attempt
 		// to write-lock the ramdisk; otherwise attempt to read-lock
@@ -357,7 +372,8 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 			
 			else
 			{ d->n_readl++; }
-			d->ticket_head--;
+			if(d->ticket_tail<d->ticket_head)
+				d->ticket_tail++;
 			r = 0;
 		 }
 

@@ -383,15 +383,18 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// the ramdisk.
 		else 
 		{
+			osp_spin_lock(&(d->mutex));
+			d->ticket_head++;
 			filp->f_flags |= F_OSPRD_LOCKED;
 			if (filp_writable)
 			{ d->n_writel++; }
-			
 			else
 			{ d->n_readl++; }
 			if(d->ticket_tail<d->ticket_head)
 				d->ticket_tail++;
+			osp_spin_unlock(&(d->mutex));
 			r = 0;
+			wake_up_all(&d->blockq);
 		 }
 
 		// Also wake up processes waiting on 'd->blockq' as needed.

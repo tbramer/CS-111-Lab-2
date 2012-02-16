@@ -66,6 +66,7 @@ typedef struct osprd_info {
 	
 	size_t n_writel;		// Number of write locks
 
+	int dead;			//whether this will cause a deadlock or not
 	/* HINT: You may want to add additional fields to help
 	         in detecting deadlock. */
 
@@ -211,8 +212,13 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 			d->n_writel = 0;
 			d->n_readl = 0;
 
-			osp_spin_unlock(&(d->mutex));		
+				
 			// Wake queue.
+			if(waitqueue_active(&d->blockq) == 0){
+				eprintk("Tail: %d head: %d\n", d->ticket_tail, d->ticket_head);				
+				d->ticket_head = d->ticket_tail;
+			}
+			osp_spin_unlock(&(d->mutex));	
 			wake_up_all(&d->blockq);		
 				
 			// Additional steps.
@@ -232,6 +238,10 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 	return r;
 }
 
+void cause_deadlock(struct file *filp, osprd_info_t *d){
+	if (file2osprd(filp) == d)
+           d->dead++;
+}
 
 /*
  * osprd_lock
@@ -257,7 +267,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 
 	if (cmd == OSPRDIOCACQUIRE) {
 
-		// EXERCISE: Lock the ramdisk.
+		// EXERCISE: Lock the ramdisk.g
 		//
 		// If *filp is open for writing (filp_writable), then attempt
 		// to write-lock the ramdisk; otherwise attempt to read-lock
@@ -298,13 +308,15 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 
 		
 		// Block
-	osp_spin_lock(&(d->mutex));
+		osp_spin_lock(&(d->mutex));
 		local_ticket = d->ticket_head;
 		d->ticket_head++;
 		osp_spin_unlock(&(d->mutex));
 		// wait_event_interruptible returns a nonzero value if
 		// interrupted by a signal, so return -ERESTARTSYS if it does.	
-
+		for_each_open_file(current, cause_deadlock, d);
+		if (d->dead > 0)
+			return -EDEADLK;
 		if (wait_event_interruptible(d->blockq, d->n_writel == 0
 			&& (!filp_writable || d->n_readl == 0)
 			&& d->ticket_tail == local_ticket))
@@ -313,6 +325,8 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 				// If this process wasn't the one being served, don't consider the ticket to increment.
 				if (d->ticket_tail == local_ticket)
 					d->ticket_tail++;
+				//if (d->ticket_head == local_ticket)
+				//	d->ticket_head--;
 				return -ERESTARTSYS;
 			}
 		osp_spin_lock(&(d->mutex));
@@ -446,6 +460,7 @@ static void osprd_setup(osprd_info_t *d)
 	d->ticket_head = d->ticket_tail = 0;
 	d->n_readl = 0;
 	d->n_writel = 0;
+	d->dead = 0;
 	/* Add code here if you add fields to osprd_info_t. */
 }
 

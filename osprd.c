@@ -211,7 +211,7 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 			//d->mutex.lock = 0;
 			d->n_writel = 0;
 			d->n_readl = 0;
-
+			d->dead = 0;
 				
 			// Wake queue.
 			if(waitqueue_active(&d->blockq) == 0){
@@ -239,8 +239,10 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 }
 
 void cause_deadlock(struct file *filp, osprd_info_t *d){
-	if (file2osprd(filp) == d)
-           d->dead++;
+	if (file2osprd(filp) == d){
+		//eprintk("deadsad: %d\n", d->dead);           
+		d->dead++;
+	}
 }
 
 /*
@@ -315,7 +317,8 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// wait_event_interruptible returns a nonzero value if
 		// interrupted by a signal, so return -ERESTARTSYS if it does.	
 		for_each_open_file(current, cause_deadlock, d);
-		if (d->dead > 0)
+		eprintk("dead: %d\n", d->dead);           
+		if (d->dead > 1)
 			return -EDEADLK;
 		if (wait_event_interruptible(d->blockq, d->n_writel == 0
 			&& (!filp_writable || d->n_readl == 0)
@@ -330,9 +333,8 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 				return -ERESTARTSYS;
 			}
 		osp_spin_lock(&(d->mutex));
-		
 		//eprintk("head: %d\ntail: %d\n", d->ticket_head, d->ticket_tail);
-		
+		d->dead = 0;
 		//eprintk("LOCKED\n");
 		if (d->mutex.lock>0)
 			r = 0;

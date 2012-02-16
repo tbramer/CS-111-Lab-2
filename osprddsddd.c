@@ -34,7 +34,7 @@
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_DESCRIPTION("CS 111 RAM Disk");
 // EXERCISE: Pass your names into the kernel as the module's authors.
-MODULE_AUTHOR("CHRIS AND TRENT");
+MODULE_AUTHOR("Skeletor");
 
 #define OSPRD_MAJOR	222
 
@@ -65,9 +65,9 @@ typedef struct osprd_info {
 	size_t n_readl;			// Number of read locks
 	
 	size_t n_writel;		// Number of write locks
-
-	unsigned desync;	//number of interrupted processes
-
+	
+	int desync;
+	
 	int dead;			//whether this will cause a deadlock or not
 	/* HINT: You may want to add additional fields to help
 	         in detecting deadlock. */
@@ -200,21 +200,24 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 		// you need, and return 0.
 		else 
 		{
+
 			osp_spin_lock(&(d->mutex));
 			// Clear lock flag.
 			filp->f_flags &= ~F_OSPRD_LOCKED;
 			//d->mutex.lock = 0;
 			d->n_writel = 0;
 			d->n_readl = 0;
-			d->dead = 0;
+
 				
 			// Wake queue.
 			if(waitqueue_active(&d->blockq) == 0){
-				//eprintk("Tail: %d head: %d\n", d->ticket_tail, d->ticket_head);				
+				eprintk("Tail: %d head: %d\n", d->ticket_tail, d->ticket_head);				
 				//d->ticket_head = d->ticket_tail;
 				d->ticket_tail += d->desync;
 				d->desync = 0;
 			}
+			
+			
 			osp_spin_unlock(&(d->mutex));	
 			wake_up_all(&d->blockq);		
 				
@@ -227,10 +230,8 @@ static int osprd_close_last(struct inode *inode, struct file *filp)
 }
 
 void cause_deadlock(struct file *filp, osprd_info_t *d){
-	if (file2osprd(filp) == d){
-		//eprintk("deadsad: %d\n", d->dead);           
-		d->dead++;
-	}
+	if (file2osprd(filp) == d)
+           d->dead++;
 }
 
 /*
@@ -300,44 +301,71 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		local_ticket = d->ticket_head;
 		d->ticket_head++;
 		osp_spin_unlock(&(d->mutex));
-		
 		// wait_event_interruptible returns a nonzero value if
 		// interrupted by a signal, so return -ERESTARTSYS if it does.	
-		for_each_open_file(current, cause_deadlock, d);
-		        
-		if (d->dead > 1 && (filp->f_flags & F_OSPRD_LOCKED))
-			return -EDEADLK;
-
-		if (wait_event_interruptible(d->blockq, d->n_writel == 0
-			&& (!filp_writable || d->n_readl == 0)
-			&& d->ticket_tail == local_ticket))
+		if (wait_event_interruptible(d->blockq, d->ticket_tail == local_ticket ))
 			{
-				//eprintk ("INTERRUPTED! Head: %u Tail: %u Local: %u\n", d->ticket_head, d->ticket_tail, local_ticket);
-				// If this process wasn't the one being served, don't consider the ticket to increment.
+				//eprintk ("INTERRUPTED! Head: %u Tail: %u Local: %u\n", 
+				// d->ticket_head, d->ticket_tail, local_ticket);
+				
+				// If this process wasn't the one being served, 
+				// don't consider the ticket to increment.
 				if (d->ticket_tail == local_ticket)
+				{
 					d->ticket_tail++;
+				}
 				else d->desync++;
 				return -ERESTARTSYS;
 			}
+		
+		if (wait_event_interruptible(d->blockq, d->ticket_tail == local_ticket 
+			&& d->n_writel == 0 && (!filp_writable || d->n_readl == 0)))
+			{
+				//eprintk ("INTERRUPTED! Head: %u Tail: %u Local: %u\n", 
+				// d->ticket_head, d->ticket_tail, local_ticket);
+				
+				// If this process wasn't the one being served, 
+				// don't consider the ticket to increment.
+				if (d->ticket_tail == local_ticket)
+				{
+					d->ticket_tail++;
+				}
+				else d->desync++;
+
+				return -ERESTARTSYS;
+			}
+		//for_each_open_file(current, cause_deadlock, d);
+		//if (d->dead > 1)
+		//	return -EDEADLK;
+		
+			
 		osp_spin_lock(&(d->mutex));
+
+		//eprintk("head: %d\ntail: %d\n", d->ticket_head, d->ticket_tail);
 		
-		d->dead = 0;
-		
+
+		//eprintk("LOCKED\n");
 		if (d->mutex.lock>0)
 			r = 0;
 		filp->f_flags |= F_OSPRD_LOCKED;
 		if (filp_writable)
-			{ d->n_writel++; d->ticket_tail++; }
+			{ d->n_writel++; eprintk("WRITE, ticket: %d\n", local_ticket);}	
 		else
-			{ d->n_readl++; }
-		
+			{ d->n_readl++; eprintk("READ, ticket: %d\n", local_ticket);}
+		d->ticket_tail++;
+
 		osp_spin_unlock(&(d->mutex));
-		//wake_up_all(&d->blockq);	
+		wake_up_all(&d->blockq);	
+		//eprintk("UNLOCKED\n");
+	
 		
-		if (!filp_writable)
-			d->ticket_tail++;
+
+		
+		eprintk("unlock\n");
 
 		r = 0;
+		
+		//osp_spin_unlock(&(d->mutex));
 
 	} else if (cmd == OSPRDIOCTRYACQUIRE) {
 
@@ -349,7 +377,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// Otherwise, if we can grant the lock request, return 0.
 
 		// Your code here (instead of the next two lines).
-		//eprintk("Attempting to try acquire\n");
+		eprintk("Attempting to try acquire\n");
 		local_ticket = d->ticket_head;
 		// Check for an existing lock.
 		if (filp->f_flags & F_OSPRD_LOCKED || d->n_writel != 0
@@ -369,7 +397,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 			{ d->n_writel++; }
 			else
 			{ d->n_readl++; }
-			if(d->ticket_tail < d->ticket_head)
+			if(d->ticket_tail<d->ticket_head)
 				d->ticket_tail++;
 			osp_spin_unlock(&(d->mutex));
 			r = 0;
@@ -403,16 +431,15 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 			d->n_writel = 0;
 			d->n_readl = 0;
 			
+			d->mutex.lock = 0;
+			
 			osp_spin_unlock(&(d->mutex));
 			// Wake queue.
-			
 			wake_up_all(&d->blockq);		
-			
-			// Return.
+
 			r = 0;
 
 		}
-		
 
 	} else
 		r = -ENOTTY; /* unknown command */

@@ -34,7 +34,7 @@
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_DESCRIPTION("CS 111 RAM Disk");
 // EXERCISE: Pass your names into the kernel as the module's authors.
-MODULE_AUTHOR("Skeletor");
+MODULE_AUTHOR("CHRIS AND TRENT");
 
 #define OSPRD_MAJOR	222
 
@@ -318,7 +318,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// interrupted by a signal, so return -ERESTARTSYS if it does.	
 		for_each_open_file(current, cause_deadlock, d);
 		eprintk("dead: %d\n", d->dead);           
-		if (d->dead > 1)
+		if (d->dead > 1 && (filp->f_flags & F_OSPRD_LOCKED))
 			return -EDEADLK;
 		if (wait_event_interruptible(d->blockq, d->n_writel == 0
 			&& (!filp_writable || d->n_readl == 0)
@@ -385,6 +385,7 @@ int osprd_ioctl(struct inode *inode, struct file *filp,
 		// the ramdisk.
 		else 
 		{
+			d->ticket_head++;
 			filp->f_flags |= F_OSPRD_LOCKED;
 			if (filp_writable)
 			{ d->n_writel++; }
